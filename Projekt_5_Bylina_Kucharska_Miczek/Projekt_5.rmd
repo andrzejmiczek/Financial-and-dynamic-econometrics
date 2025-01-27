@@ -1,0 +1,368 @@
+---
+title: "Projekt 5"
+author: "Kamila Kucharska, Andrzej Miczek, Grzegorz Bylina"
+date: "2024-12-29"
+output: html_document
+---
+
+# Wczytanie bibliotek
+
+```{r pressure, echo=FALSE}
+#install.packages("fitdistrplus")
+library(rugarch)
+library(rmgarch)
+library(zoo)
+library(xts)
+library(fitdistrplus)
+library(tseries)
+```
+
+# Wczytanie danych
+
+```{r}
+files <- list(
+  xptusd = "xptusd_d.csv",
+  xauusd = "xauusd_d.csv",
+  xpdusd = "xpdusd_d.csv",
+  xagusd = "xagusd_d.csv"
+)
+
+data_list <- lapply(files, function(file) {
+  read.csv(file)
+})
+```
+
+# Funkcja obliczająca stopy zwrotu
+
+```{r}
+calculate_log_returns <- function(data) {
+  data$Log_Return <- c(NA, diff(log(data$Zamkniecie)))
+  return(na.omit(data))
+}
+
+data_list <- lapply(data_list, calculate_log_returns)
+```
+
+# Przygotowanie danych dla modeli wielowymiarowych
+
+```{r}
+prepare_multivariate_data <- function(data_list) {
+  combined_data <- do.call(cbind, lapply(data_list, function(x) x$Log_Return))
+  colnames(combined_data) <- names(data_list)
+  return(na.omit(combined_data))
+}
+
+multivariate_data <- prepare_multivariate_data(data_list)
+```
+
+# Określenie okna przesuwanego o 2 lata (założenie 252 dni giełdowych w roku)
+
+```{r}
+time_indices <- index(multivariate_data)
+window_size <- 2 * 252
+
+results <- list()
+for (start_idx in 1:(nrow(multivariate_data) - window_size + 1)) {
+  end_idx <- start_idx + window_size - 1
+  window_data <- multivariate_data[start_idx:end_idx, ]
+}
+```
+
+# Specyfikacja jednowymiarowego GARCH
+
+```{r}
+  spec_norm <- ugarchspec(
+    variance.model = list(model = "sGARCH"),
+    distribution.model = "norm"
+  )
+
+  spec_t <- ugarchspec(
+    variance.model = list(model = "sGARCH"),
+    distribution.model = "std"
+  )
+```
+
+# Dopasowanie modeli jednowymiarowych
+
+```{r}
+data_series <- multivariate_data[, 1]  
+model_norm <- ugarchfit(spec = spec_norm, data = data_series)
+model_t <- ugarchfit(spec = spec_t, data = data_series)
+```
+
+# Specyfikacja modeli BEKK i DCC GARCH
+
+```{r}
+uspec <- multispec(replicate(ncol(multivariate_data), ugarchspec()))
+spec_bekk <- dccspec(uspec = uspec, dccOrder = c(1, 1), model = "bekk")
+spec_dcc <- dccspec(uspec = uspec, dccOrder = c(1, 1), model = "dcc")
+
+fit_bekk <- dccfit(spec = spec_bekk, data = multivariate_data)
+fit_dcc <- dccfit(spec = spec_dcc, data = multivariate_data)
+
+uspec <- multispec(replicate(ncol(window_data), ugarchspec()))
+spec_bekk_norm <- dccspec(uspec = uspec, dccOrder = c(1, 1), model = "bekk", distribution = "mvnorm")
+spec_bekk_t <- dccspec(uspec = uspec, dccOrder = c(1, 1), model = "bekk", distribution = "mvt")
+spec_dcc_norm <- dccspec(uspec = uspec, dccOrder = c(1, 1), model = "dcc", distribution = "mvnorm")
+spec_dcc_t <- dccspec(uspec = uspec, dccOrder = c(1, 1), model = "dcc", distribution = "mvt")
+
+fit_bekk_norm <- dccfit(spec = spec_bekk_norm, data = window_data)
+fit_bekk_t <- dccfit(spec = spec_bekk_t, data = window_data)
+fit_dcc_norm <- dccfit(spec = spec_dcc_norm, data = window_data)
+fit_dcc_t <- dccfit(spec = spec_dcc_t, data = window_data)
+
+```
+
+
+# Prognoza dla modelu GARCH z rozkładem normalnym
+
+```{r}
+forecast_norm <- ugarchforecast(model_norm, n.ahead = 1)
+forecast_mean_norm <- as.numeric(fitted(forecast_norm))
+forecast_variance_norm <- as.numeric(sigma(forecast_norm)^2)
+
+VaR_1_norm <- qnorm(0.01, mean = forecast_mean_norm, sd = sqrt(forecast_variance_norm))
+VaR_5_norm <- qnorm(0.05, mean = forecast_mean_norm, sd = sqrt(forecast_variance_norm))
+
+```
+
+# Prognoza dla modelu DCC GARCH
+
+```{r}
+forecast_dcc <- dccforecast(fit_dcc, n.ahead = 1)
+forecast_mean_dcc <- fitted(forecast_dcc)
+forecast_variance_dcc <- sigma(forecast_dcc)
+```
+
+# Dla rozkładu normalnego
+```{r}
+VaR_1_dcc_norm <- qnorm(0.01, mean = forecast_mean_dcc, sd = sqrt(forecast_variance_dcc))
+VaR_5_dcc_norm <- qnorm(0.05, mean = forecast_mean_dcc, sd = sqrt(forecast_variance_dcc))
+```
+
+# Dla rozkładu t-Studenta
+
+```{r}
+df <- 1
+VaR_1_dcc_t <- forecast_mean_dcc + qt(0.01, df = df) * sqrt(forecast_variance_dcc)
+VaR_5_dcc_t <- forecast_mean_dcc + qt(0.05, df = df) * sqrt(forecast_variance_dcc)
+```
+
+## BEKK
+
+# Obliczenie odchylenia standardowego jako pierwiastka z diagonalnej kowariancji
+
+```{r}
+mean_H <- apply(fit_bekk@mfit$H, c(1, 2), mean)
+forecast_sd_bekk <- sqrt(diag(mean_H))
+```
+
+# Dla rozkładu normalnego
+
+```{r}
+VaR_1_bekk_norm <- qnorm(0.01, mean = 0, sd = forecast_sd_bekk)
+VaR_5_bekk_norm <- qnorm(0.05, mean = 0, sd = forecast_sd_bekk)
+df <- 1
+```
+
+# Dla rozkładu t-Studenta
+
+```{r}
+VaR_1_bekk_t <- mean_H + qt(0.01, df = df) * forecast_sd_bekk
+VaR_5_bekk_t <- mean_H + qt(0.05, df = df) * forecast_sd_bekk
+```
+
+# Funkcja obliczająca VaR dla modelu z rozkładem t-Studenta
+
+```{r}
+forecast_t <- ugarchforecast(model_t, n.ahead = 1)
+
+forecast_mean_t <- as.numeric(fitted(forecast_t))
+forecast_variance_t <- as.numeric(sigma(forecast_t)^2)
+df <- 1
+```
+
+# Kwantyle dla poziomu ufności 1% i 5%
+
+```{r}
+VaR_1_t <- forecast_mean_t + qt(0.01, df = df) * sqrt(forecast_variance_t)
+VaR_5_t <- forecast_mean_t + qt(0.05, df = df) * sqrt(forecast_variance_t)
+
+```
+
+
+# Wyniki
+
+```{r}
+cat("VaR (1%) dla GARCH Normal:", VaR_1_norm, "\n")
+cat("VaR (5%) dla GARCH Normal:", VaR_5_norm, "\n")
+cat("VaR (1%) dla GARCH t-Studenta:", VaR_1_t, "\n")
+cat("VaR (5%) dla GARCH t-Studenta:", VaR_5_t, "\n")
+cat("VaR (1%) dla DCC GARCH z rozkładem normalnym:", VaR_1_dcc_norm, "\n")
+cat("VaR (5%) dla DCC GARCH z rozkładem normalnym:", VaR_5_dcc_norm, "\n")
+cat("VaR (1%) dla DCC GARCH z rozkładem t-Studenta:", VaR_1_dcc_t, "\n")
+cat("VaR (5%) dla DCC GARCH z rozkładem t-Studenta:", VaR_5_dcc_t, "\n")
+cat("VaR (1%) dla BEKK z rozkładem normalnym:", VaR_1_bekk_norm, "\n")
+cat("VaR (5%) dla BEKK z rozkładem normalnym:", VaR_5_bekk_norm, "\n")
+cat("VaR (1%) dla BEKK z rozkładem t-Studenta:", VaR_1_bekk_t, "\n")
+cat("VaR (5%) dla BEKK z rozkładem t-Studenta:", VaR_5_bekk_t, "\n")
+
+```
+
+# Reszty warunkowe dla modelu GARCH
+
+```{r}
+residuals_norm <- residuals(model_norm)
+residuals_t <- residuals(model_t)
+```
+
+# Test Jarque-Bera dla reszt modelu z rozkładem normalnym
+
+```{r}
+cat("Test Jarque-Bera dla modelu GARCH z rozkładem normalnym:\n")
+jb_test_norm <- jarque.bera.test(residuals_norm)
+cat("  Statystyka:", jb_test_norm$statistic, "\n")
+cat("  p-wartość:", jb_test_norm$p.value, "\n")
+if (jb_test_norm$p.value < 0.05) {
+  cat("  Odrzucamy hipotezę o normalności (p < 0.05)\n")
+} else {
+  cat("  Brak podstaw do odrzucenia hipotezy o normalności (p >= 0.05)\n")
+}
+```
+# Test Kołmogorowa-Smirnow dla reszt modelu z rozkładem t-Studenta
+
+```{r}
+# Standaryzacja reszt
+standardized_residuals <- (residuals_t - mean_t) / sd_t
+
+# Test KS
+cat("\nTest Kołmogorowa-Smirnowa dla zgodności z rozkładem t-Studenta:\n")
+ks_test_t <- ks.test(standardized_residuals, "pt", df = df)
+cat("  Statystyka:", ks_test_t$statistic, "\n")
+cat("  p-wartość:", ks_test_t$p.value, "\n")
+
+if (ks_test_t$p.value < 0.05) {
+  cat("  Odrzucamy hipotezę o zgodności z rozkładem t-Studenta (p < 0.05)\n")
+} else {
+  cat("  Brak podstaw do odrzucenia hipotezy o zgodności z rozkładem t-Studenta (p >= 0.05)\n")
+}
+
+```
+
+# Reszty z modelu DCC GARCH rozkład normalny
+
+```{r}
+dcc_residuals <- residuals(fit_dcc) 
+dcc_sigma <- sigma(fit_dcc)          
+standarized_residuals <- dcc_residuals / dcc_sigma  
+n_vars <- ncol(standarized_residuals)
+```
+
+# Iteracja przez zmienne standaryzowanych reszt
+
+```{r}
+for (i in 1:n_vars) {
+  cat("\nTest Jarque-Bera dla zmiennej:", colnames(standarized_residuals)[i], "\n")
+  
+  residuals_i <- standarized_residuals[, i]
+  jb_test <- jarque.bera.test(residuals_i)
+  cat("  Statystyka:", jb_test$statistic, "\n")
+  cat("  p-wartość:", jb_test$p.value, "\n")
+  
+  if (jb_test$p.value < 0.05) {
+    cat("  Odrzucamy hipotezę o normalności (p < 0.05)\n")
+  } else {
+    cat("  Brak podstaw do odrzucenia hipotezy o normalności (p >= 0.05)\n")
+  }
+}
+```
+# Reszty z modelu DCC GARCH rozkład tstudenta
+```{r}
+dcc_residuals <- residuals(fit_dcc_t) 
+dcc_sigma <- sigma(fit_dcc_t)         
+standardized_residuals <- dcc_residuals / dcc_sigma 
+n_vars <- ncol(standardized_residuals)            
+```
+
+# Iteracja przez zmienne standaryzowanych reszt
+```{r}
+for (i in 1:n_vars) {
+  cat("\nTest Kołmogorowa-Smirnowa dla zmiennej:", colnames(standardized_residuals)[i], "\n")
+  
+  
+  residuals_i <- standardized_residuals[, i]
+  
+  # Test KS
+  ks_test <- ks.test(residuals_i, "pt", df = df)
+  cat("  Statystyka:", ks_test$statistic, "\n")
+  cat("  p-wartość:", ks_test$p.value, "\n")
+  
+  if (ks_test$p.value < 0.05) {
+    cat("  Odrzucamy hipotezę o zgodności z rozkładem t-Studenta (p < 0.05)\n")
+  } else {
+    cat("  Brak podstaw do odrzucenia hipotezy o zgodności z rozkładem t-Studenta (p >= 0.05)\n")
+  }
+}
+```
+
+
+# Reszty z modelu BEKK
+
+```{r}
+bekk_residuals <- residuals(fit_bekk)  
+bekk_sigma <- sigma(fit_bekk)         
+standarized_residuals_bekk <- bekk_residuals / bekk_sigma  
+n_vars_bekk <- ncol(standarized_residuals_bekk)
+```
+
+# Iteracja przez zmienne standaryzowanych reszt
+
+```{r}
+for (i in 1:n_vars_bekk) {
+  cat("\nTest Jarque-Bera dla zmiennej:", colnames(standarized_residuals_bekk)[i], "\n")
+  residuals_bekk_i <- standarized_residuals_bekk[, i]
+  
+  jb_test_bekk <- jarque.bera.test(residuals_bekk_i)
+  
+  cat("  Statystyka:", jb_test_bekk$statistic, "\n")
+  cat("  p-wartość:", jb_test_bekk$p.value, "\n")
+  
+  if (jb_test_bekk$p.value < 0.05) {
+    cat("  Odrzucamy hipotezę o normalności (p < 0.05)\n")
+  } else {
+    cat("  Brak podstaw do odrzucenia hipotezy o normalności (p >= 0.05)\n")
+  }
+}
+```
+#  reszty z modelu BEKK GARCH z rozkładem t-Studenta
+```{r}
+bekk_residuals <- residuals(fit_bekk_t) 
+bekk_sigma <- sigma(fit_bekk_t)         
+standardized_residuals <- bekk_residuals / bekk_sigma 
+n_vars <- ncol(standardized_residuals)             
+```
+
+# Iteracja przez zmienne standaryzowanych reszt
+```{r}
+for (i in 1:n_vars) {
+  cat("\nTest Kołmogorowa-Smirnowa dla zmiennej:", colnames(standardized_residuals)[i], "\n")
+  residuals_i <- standardized_residuals[, i]
+
+  # Test KS
+  ks_test <- ks.test(residuals_i, "pt", df = df)
+  cat("  Statystyka:", ks_test$statistic, "\n")
+  cat("  p-wartość:", ks_test$p.value, "\n")
+  
+  if (ks_test$p.value < 0.05) {
+    cat("  Odrzucamy hipotezę o zgodności z rozkładem t-Studenta (p < 0.05)\n")
+  } else {
+    cat("  Brak podstaw do odrzucenia hipotezy o zgodności z rozkładem t-Studenta (p >= 0.05)\n")
+  }
+}
+```
+
+
+
+
+
+

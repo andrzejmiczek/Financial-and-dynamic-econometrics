@@ -1,0 +1,306 @@
+---
+title: "Projekt 7"
+author: "Kamila Kucharska, Andrzej Miczek, Grzegorz Bylina"
+date: "2025-01-22"
+output: html_document
+---
+
+```{r}
+library(tidyverse)
+library(lubridate)
+library(rugarch)
+library(tseries)
+library(lmtest)
+library(vars)
+```
+
+```{r}
+wig20 <- read.csv("wig20_d.csv")
+dax <- read.csv("^dax_d.csv")
+px <- read.csv("px_d.csv")
+xu100 <- read.csv("^xu100_d.csv")
+```
+
+```{r}
+prepare_data <- function(data, date_col, price_col) {
+  data <- data %>%
+    rename(Date = !!sym(date_col), Price = !!sym(price_col)) %>%
+    mutate(Date = as.Date(Date, format = "%Y-%m-%d")) %>%
+    arrange(Date) %>%
+    mutate(Return = 100 * (log(Price) - log(lag(Price)))) %>%
+    na.omit()
+  return(data)
+}
+```
+
+```{r}
+wig20 <- prepare_data(wig20, "Data", "Zamkniecie")
+dax <- prepare_data(dax, "Data", "Zamkniecie")
+px <- prepare_data(px, "Date", "Close")
+xu100 <- prepare_data(xu100, "Data", "Zamkniecie")
+```
+
+```{r}
+all_data <- dax %>%
+  rename(DAX_Return = Return) %>%
+  inner_join(wig20 %>% rename(WIG20_Return = Return), by = "Date") %>%
+  inner_join(px %>% rename(PX_Return = Return), by = "Date") %>%
+  inner_join(xu100 %>% rename(XU100_Return = Return), by = "Date")
+
+```
+
+```{r}
+all_data <- all_data[,c(1,7,13,19,25)]
+```
+
+
+```{r}
+pandemic_pre_period <- as.Date(c("2019-09-11", "2020-03-10"))
+pandemic_post_period <- as.Date(c("2020-03-11", "2020-09-10"))
+ukraine_pre_period <- as.Date(c("2021-08-24", "2022-02-23"))
+ukraine_post_period <- as.Date(c("2022-02-24", "2022-08-24"))
+```
+
+```{r}
+pandemic_pre_data <- all_data %>% filter(Date >= pandemic_pre_period[1] & Date <= pandemic_pre_period[2])
+pandemic_post_data <- all_data %>% filter(Date >= pandemic_post_period[1] & Date <= pandemic_post_period[2])
+ukraine_pre_data <- all_data %>% filter(Date >= ukraine_pre_period[1] & Date <= ukraine_pre_period[2])
+ukraine_post_data <- all_data %>% filter(Date >= ukraine_post_period[1] & Date <= ukraine_post_period[2])
+```
+
+#Nieskorygowany współczynnik korelacji
+```{r}
+calculate_corrected_correlation <- function(pre_data, post_data, var1, var2) {
+  rho_pre <- cor(pre_data[[var1]], pre_data[[var2]])
+  rho_post <- cor(post_data[[var1]], post_data[[var2]])
+
+  # Wariancje przed i w trakcie kryzysu
+  var_pre <- var(pre_data[[var1]])
+  var_post <- var(post_data[[var1]])
+
+  delta <- (var_post / var_pre) - 1
+
+  # Skorygowana korelacja
+  rho_star_pre <- rho_pre / sqrt(1 + delta * (1 - rho_pre^2))
+  rho_star_post <- rho_post / sqrt(1 + delta * (1 - rho_post^2))
+  
+  return(list(rho_star_pre = rho_star_pre, rho_star_post = rho_star_post))
+}
+```
+
+
+```{r}
+result_pandemic_W_D <- calculate_corrected_correlation(pandemic_pre_data, pandemic_post_data, "WIG20_Return", "DAX_Return")
+result_ukraine_W_D <- calculate_corrected_correlation(ukraine_pre_data, ukraine_post_data, "WIG20_Return", "DAX_Return")
+
+result_pandemic_D_W <- calculate_corrected_correlation(pandemic_pre_data, pandemic_post_data,"DAX_Return",  "WIG20_Return")
+result_ukraine_D_W <- calculate_corrected_correlation(ukraine_pre_data, ukraine_post_data, "DAX_Return",  "WIG20_Return")
+
+result_pandemic_P_D <-calculate_corrected_correlation(pandemic_pre_data, pandemic_post_data,"PX_Return", "DAX_Return")
+result_ukraine_P_D <- calculate_corrected_correlation(ukraine_pre_data, ukraine_post_data,"PX_Return", "DAX_Return")
+
+result_pandemic_D_P <-calculate_corrected_correlation(pandemic_pre_data, pandemic_post_data,"DAX_Return", "PX_Return")
+result_ukraine_D_P <- calculate_corrected_correlation(ukraine_pre_data, ukraine_post_data,"DAX_Return", "PX_Return")
+
+result_pandemic_P_W <-calculate_corrected_correlation(pandemic_pre_data, pandemic_post_data,"PX_Return", "WIG20_Return")
+result_ukraine_P_W <- calculate_corrected_correlation(ukraine_pre_data, ukraine_post_data,"PX_Return", "WIG20_Return")
+
+result_pandemic_W_P <-calculate_corrected_correlation(pandemic_pre_data, pandemic_post_data,"WIG20_Return", "PX_Return")
+result_ukraine_W_P <- calculate_corrected_correlation(ukraine_pre_data, ukraine_post_data,"WIG20_Return", "PX_Return")
+
+result_pandemic_W_X <-calculate_corrected_correlation(pandemic_pre_data, pandemic_post_data,"WIG20_Return", "XU100_Return")
+result_ukraine_W_X <- calculate_corrected_correlation(ukraine_pre_data, ukraine_post_data,"WIG20_Return", "XU100_Return")
+
+result_pandemic_X_W <-calculate_corrected_correlation(pandemic_pre_data, pandemic_post_data,"XU100_Return", "WIG20_Return")
+result_ukraine_X_W <- calculate_corrected_correlation(ukraine_pre_data, ukraine_post_data,"XU100_Return", "WIG20_Return")
+
+result_pandemic_P_X <-calculate_corrected_correlation(pandemic_pre_data, pandemic_post_data,"PX_Return", "XU100_Return")
+result_ukraine_P_X <- calculate_corrected_correlation(ukraine_pre_data, ukraine_post_data,"PX_Return", "XU100_Return")
+
+result_pandemic_X_P <-calculate_corrected_correlation(pandemic_pre_data, pandemic_post_data,"XU100_Return", "PX_Return")
+result_ukraine_X_P <- calculate_corrected_correlation(ukraine_pre_data, ukraine_post_data,"XU100_Return", "PX_Return")
+
+result_pandemic_D_X <-calculate_corrected_correlation(pandemic_pre_data, pandemic_post_data,"DAX_Return", "XU100_Return")
+result_ukraine_D_X <- calculate_corrected_correlation(ukraine_pre_data, ukraine_post_data,"DAX_Return", "XU100_Return")
+
+result_pandemic_X_D <-calculate_corrected_correlation(pandemic_pre_data, pandemic_post_data,"XU100_Return", "DAX_Return")
+result_ukraine_X_D <- calculate_corrected_correlation(ukraine_pre_data, ukraine_post_data,"XU100_Return", "DAX_Return")
+
+print(paste("Pandemia WIG20, DAX:", result_pandemic_W_D))
+print(paste("Wojna WIG20, DAX:", result_ukraine_W_D))
+print(paste("Pandemia DAX, WIG20:", result_pandemic_D_W))
+print(paste("Wojna DAX, WIG20:", result_ukraine_D_W))
+print(paste("Pandemia PX, DAX:", result_pandemic_P_D))
+print(paste("Wojna PX, DAX:", result_ukraine_P_D))
+print(paste("Pandemia DAX, PX:", result_pandemic_D_P))
+print(paste("Wojna DAX, PX:", result_ukraine_D_P))
+print(paste("Pandemia PX, WIG20:", result_pandemic_P_W))
+print(paste("Wojna PX, WIG20:", result_ukraine_P_W))
+print(paste("Pandemia WIG20, PX:", result_pandemic_W_P))
+print(paste("Wojna WIG20, PX:", result_ukraine_W_P))
+print(paste("Pandemia WIG20, XU100:", result_pandemic_W_X))
+print(paste("Wojna WIG20, XU100:", result_ukraine_W_X))
+print(paste("Pandemia XU100, WIG20:", result_pandemic_X_W))
+print(paste("Wojna XU100, WIG20:", result_ukraine_X_W))
+print(paste("Pandemia PX, XU100:", result_pandemic_P_X))
+print(paste("Wojna PX, XU100:", result_ukraine_P_X))
+print(paste("Pandemia XU100, PX:", result_pandemic_X_P))
+print(paste("Wojna XU100, PX:", result_ukraine_X_P))
+print(paste("Pandemia DAX, XU100:", result_pandemic_D_X))
+print(paste("Wojna DAX, XU100:", result_ukraine_D_X))
+print(paste("Pandemia XU100, DAX:", result_pandemic_X_D))
+print(paste("Wojna XU100, DAX:", result_ukraine_X_D))
+```
+
+
+
+#Test
+```{r}
+test_contagion <- function(result, n_k, n_p) {
+  rho_star_post <- result$rho_star_post
+  rho_star_pre <- result$rho_star_pre
+  df <- n_k + n_p - 4
+  
+  t_stat <- (rho_star_post - rho_star_pre) * sqrt((n_k + n_p - 4) / (1 - (rho_star_post - rho_star_pre)^2))
+  
+  p_value <- pt(t_stat, df, lower.tail = FALSE)
+  
+  return(list(t_stat = t_stat, p_value = p_value))
+}
+```
+
+```{r}
+# Wywołania dla pandemic
+test_pandemic_W_D <- test_contagion(result_pandemic_W_D, 118, 119)
+test_pandemic_D_W <- test_contagion(result_pandemic_D_W, 118, 119)
+test_pandemic_P_D <- test_contagion(result_pandemic_P_D, 118, 119)
+test_pandemic_D_P <- test_contagion(result_pandemic_D_P, 118, 119)
+test_pandemic_P_W <- test_contagion(result_pandemic_P_W, 118, 119)
+test_pandemic_W_P <- test_contagion(result_pandemic_W_P, 118, 119)
+test_pandemic_W_X <- test_contagion(result_pandemic_W_X, 118, 119)
+test_pandemic_X_W <- test_contagion(result_pandemic_X_W, 118, 119)
+test_pandemic_P_X <- test_contagion(result_pandemic_P_X, 118, 119)
+test_pandemic_X_P <- test_contagion(result_pandemic_X_P, 118, 119)
+test_pandemic_D_X <- test_contagion(result_pandemic_D_X, 118, 119)
+test_pandemic_X_D <- test_contagion(result_pandemic_X_D, 118, 119)
+
+
+cat("Wynik dla test_pandemic_W_D:\n")
+print(test_pandemic_W_D)
+cat("\n")
+
+cat("Wynik dla test_pandemic_D_W:\n")
+print(test_pandemic_D_W)
+cat("\n")
+
+cat("Wynik dla test_pandemic_P_D:\n")
+print(test_pandemic_P_D)
+cat("\n")
+
+cat("Wynik dla test_pandemic_D_P:\n")
+print(test_pandemic_D_P)
+cat("\n")
+
+cat("Wynik dla test_pandemic_P_W:\n")
+print(test_pandemic_P_W)
+cat("\n")
+
+cat("Wynik dla test_pandemic_W_P:\n")
+print(test_pandemic_W_P)
+cat("\n")
+
+cat("Wynik dla test_pandemic_W_X:\n")
+print(test_pandemic_W_X)
+cat("\n")
+
+cat("Wynik dla test_pandemic_X_W:\n")
+print(test_pandemic_X_W)
+cat("\n")
+
+cat("Wynik dla test_pandemic_P_X:\n")
+print(test_pandemic_P_X)
+cat("\n")
+
+cat("Wynik dla test_pandemic_X_P:\n")
+print(test_pandemic_X_P)
+cat("\n")
+
+cat("Wynik dla test_pandemic_D_X:\n")
+print(test_pandemic_D_X)
+cat("\n")
+
+cat("Wynik dla test_pandemic_X_D:\n")
+print(test_pandemic_X_D)
+cat("\n")
+```
+```{r}
+
+# Wywołania dla ukraine
+test_ukraine_W_D <- test_contagion(result_ukraine_W_D, 117, 122)
+test_ukraine_D_W <- test_contagion(result_ukraine_D_W, 117, 122)
+test_ukraine_P_D <- test_contagion(result_ukraine_P_D, 117, 122)
+test_ukraine_D_P <- test_contagion(result_ukraine_D_P, 117, 122)
+test_ukraine_P_W <- test_contagion(result_ukraine_P_W, 117, 122)
+test_ukraine_W_P <- test_contagion(result_ukraine_W_P, 117, 122)
+test_ukraine_W_X <- test_contagion(result_ukraine_W_X, 117, 122)
+test_ukraine_X_W <- test_contagion(result_ukraine_X_W, 117, 122)
+test_ukraine_P_X <- test_contagion(result_ukraine_P_X, 117, 122)
+test_ukraine_X_P <- test_contagion(result_ukraine_X_P, 117, 122)
+test_ukraine_D_X <- test_contagion(result_ukraine_D_X, 117, 122)
+test_ukraine_X_D <- test_contagion(result_ukraine_X_D, 117, 122)
+
+
+cat("Wynik dla test_ukraine_W_D:\n")
+print(test_ukraine_W_D)
+cat("\n")
+
+cat("Wynik dla test_ukraine_D_W:\n")
+print(test_ukraine_D_W)
+cat("\n")
+
+cat("Wynik dla test_ukraine_P_D:\n")
+print(test_ukraine_P_D)
+cat("\n")
+
+cat("Wynik dla test_ukraine_D_P:\n")
+print(test_ukraine_D_P)
+cat("\n")
+
+cat("Wynik dla test_ukraine_P_W:\n")
+print(test_ukraine_P_W)
+cat("\n")
+
+cat("Wynik dla test_ukraine_W_P:\n")
+print(test_ukraine_W_P)
+cat("\n")
+
+cat("Wynik dla test_ukraine_W_X:\n")
+print(test_ukraine_W_X)
+cat("\n")
+
+cat("Wynik dla test_ukraine_X_W:\n")
+print(test_ukraine_X_W)
+cat("\n")
+
+cat("Wynik dla test_ukraine_P_X:\n")
+print(test_ukraine_P_X)
+cat("\n")
+
+cat("Wynik dla test_ukraine_X_P:\n")
+print(test_ukraine_X_P)
+cat("\n")
+
+cat("Wynik dla test_ukraine_D_X:\n")
+print(test_ukraine_D_X)
+cat("\n")
+
+cat("Wynik dla test_ukraine_X_D:\n")
+print(test_ukraine_X_D)
+cat("\n")
+```
+
+
+
+
+
+

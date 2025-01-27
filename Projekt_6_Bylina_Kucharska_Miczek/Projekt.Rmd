@@ -1,0 +1,264 @@
+---
+title: "EFID projekt 6"
+author: "Grzegorz Bylina, Kamila Kucharska, Andrzej Miczek"
+date: "2025-01-08"
+output: html_document
+---
+
+# Załadowanie bibliotek
+```{r}
+library(dplyr)
+library(fracdiff)
+library(forecast)
+```
+
+# Wczytanie danych
+```{r}
+data <- read.delim("pkn.txt", header = TRUE, sep = ",", dec = ".")
+```
+
+# Przekształcenie danych
+```{r}
+data <- data[,-c(1,2,10)]
+```
+
+# Obliczenie stóp zwrotu
+```{r}
+data$Zamkniecie_lag <- dplyr::lag(data$X.CLOSE.,1)
+
+# Logarytmiczne stopy zwrotu
+data$Stopy_zwrotu_log <- log(data$X.OPEN.) - log(data$Zamkniecie_lag)
+
+# Zwykłe stopy zwrotu
+data$Stopy_zwrotu_zwykle <- (data$X.OPEN. - data$Zamkniecie_lag) / data$Zamkniecie_lag
+
+```
+
+# Sprawdzenie liczebności poszczególnych okien 5-minutowych
+```{r}
+liczebnosc <- data %>%
+  count(X.TIME.)
+print(liczebnosc)
+```
+```{r}
+data <- data %>%
+  filter(X.TIME. != 165500)
+```
+
+
+# Obliczenie średniej stopy zwrotu dla każdego 5-minutowego okresu
+```{r}
+srednie <- data %>%
+  group_by(X.TIME.) %>%
+  summarise(Srednia_Stopy_Zwrotu = mean(abs(Stopy_zwrotu_zwykle), na.rm = TRUE))
+```
+
+# Obliczenie pamięci długiej przy wykorzystaniu innej funkcji w celu weryfikacji
+```{r}
+
+#data <- data %>%
+ # mutate(Kwadrat_Stopy_Zwrotu = Stopy_zwrotu_zwykle^2)
+#arf<-arfima(data$Kwadrat_Stopy_Zwrotu)
+
+```
+
+```{r}
+#summary(arf)
+#print(arf$d)
+```
+
+
+
+# Oszacowanie prarmetru długiej pamięci
+```{r}
+data <- data %>%
+  mutate(Kwadrat_Stopy_Zwrotu = Stopy_zwrotu_zwykle^2)
+
+dane<-data[-1,]
+fd_before <- fracdiff(dane$Kwadrat_Stopy_Zwrotu, h=20)
+fd_before$d
+```
+
+# Korelgoram dla 2016 opóźnień
+```{r}
+acf_squared <- acf(dane$Kwadrat_Stopy_Zwrotu, lag.max = 7 * 24 * 12)
+plot(acf_squared$acf[-1], main = "Korelogram 7-dniowego opóźnienia dla stóp zwrotu overnight", type = 'l')
+
+```
+
+
+
+
+
+# Podzielenie stóp przez średnią z 5min okresów
+```{r}
+dane$Wynik <- dane$Stopy_zwrotu_zwykle / srednie$Srednia_Stopy_Zwrotu
+head(dane)
+```
+# Obliczenie pamięci długiej przy wykorzystaniu innej funkcji w celu weryfikacji
+```{r}
+#dane <- dane %>%
+#  mutate(Kwadrat_Wynik = Wynik^2)
+#arf<-arfima(dane$Kwadrat_Wynik)
+
+```
+
+```{r}
+#summary(arf)
+#print(arf$d)
+```
+
+# Obliczenie parametru pamięci długiej dla podzielonych stóp
+```{r}
+dane <- dane %>%
+  mutate(Kwadrat_Wynik = Wynik^2)
+
+fd_after <- fracdiff(dane$Kwadrat_Wynik, h=20)
+fd_after$d
+```
+
+# Sprawdzenie liczby zer
+```{r}
+tab <- table(dane$Stopy_zwrotu_zwykle)
+liczba_zer <- tab["0"]
+print(liczba_zer)
+```
+
+# Korelgoram dla 2016 opóźnień
+```{r}
+acf_squared <- acf(dane$Kwadrat_Wynik, lag.max = 7 * 24 * 12)
+plot(acf_squared$acf[-1], main = "Korelogram dla zestandaryzowanych stóp zwrotu overnight", type = 'l')
+
+```
+
+```{r}
+data<-data[-1,]
+# Korelogram przed standaryzacją
+acf(data$Kwadrat_Stopy_Zwrotu, lag.max = 7 * 24 * 12, main = "Przed Standaryzacją")
+
+
+
+# Korelogram po standaryzacji
+acf(dane$Kwadrat_Wynik, lag.max = 7 * 24 * 12, main = "Po Standaryzacji")
+
+```
+
+```{r}
+# Przed standaryzacją
+fd_przed <- fracdiff(data$Kwadrat_Stopy_Zwrotu, h = 20)
+
+# Po standaryzacji
+fd_po <- fracdiff(dane$Kwadrat_Wynik, h = 20)
+
+# Wyniki
+fd_przed$d
+fd_po$d
+
+```
+```{r}
+library(ggplot2)
+# Średnia zmienność w ciągu dnia przed standaryzacją
+ggplot(data, aes(x = X.TIME., y = abs(Stopy_zwrotu_zwykle))) +
+  stat_summary(fun = mean, geom = "line") +
+  ggtitle("Sezonowość przed standaryzacją | overnight")
+
+# Średnia zmienność w ciągu dnia po standaryzacji
+ggplot(dane, aes(x = X.TIME., y = abs(Wynik))) +
+  stat_summary(fun = mean, geom = "line") +
+  ggtitle("Sezonowość po standaryzacji | overnight")
+
+```
+```{r}
+data_no_overnight <- data %>%
+  filter(X.TIME. != "90000")
+
+data_no_overnight<-data_no_overnight[,c(1:7)]
+```
+
+```{r}
+data_no_overnight$Zamkniecie_lag <- dplyr::lag(data_no_overnight$X.CLOSE.,1)
+
+# Logarytmiczne stopy zwrotu
+data_no_overnight$Stopy_zwrotu_log <- log(data_no_overnight$X.OPEN.) - log(data_no_overnight$Zamkniecie_lag)
+
+# Zwykłe stopy zwrotu
+data_no_overnight$Stopy_zwrotu_zwykle <- (data_no_overnight$X.OPEN. - data_no_overnight$Zamkniecie_lag) / data_no_overnight$Zamkniecie_lag
+
+```
+
+# Sprawdzenie liczebności poszczególnych okien 5-minutowych
+```{r}
+liczebnosc <- data_no_overnight %>%
+  count(X.TIME.)
+print(liczebnosc)
+```
+
+# Obliczenie średniej stopy zwrotu dla każdego 5-minutowego okresu
+```{r}
+srednie2 <- data_no_overnight %>%
+  group_by(X.TIME.) %>%
+  summarise(Srednia_Stopy_Zwrotu = mean(abs(Stopy_zwrotu_zwykle), na.rm = TRUE))
+```
+
+
+# Oszacowanie prarmetru długiej pamięci
+```{r}
+data_no_overnight <- data_no_overnight %>%
+  mutate(Kwadrat_Stopy_Zwrotu = Stopy_zwrotu_zwykle^2)
+
+data_no_overnight<-data_no_overnight[-1,]
+fd_before <- fracdiff(data_no_overnight$Kwadrat_Stopy_Zwrotu, h=20)
+fd_before$d
+```
+
+# Korelgoram dla 2016 opóźnień
+```{r}
+acf_squared <- acf(dane$Kwadrat_Stopy_Zwrotu, lag.max = 7 * 24 * 12)
+plot(acf_squared$acf[-1], main = "Korelogram 7-dniowego opóźnienia dla stóp zwortu", type = 'l')
+
+```
+
+
+# Podzielenie stóp przez średnią z 5min okresów
+```{r}
+data_no_overnight$Wynik <- data_no_overnight$Stopy_zwrotu_zwykle / srednie2$Srednia_Stopy_Zwrotu
+head(data_no_overnight)
+```
+
+# Obliczenie parametru pamięci długiej dla podzielonych stóp
+```{r}
+data_no_overnight <- data_no_overnight %>%
+  mutate(Kwadrat_Wynik = Wynik^2)
+
+fd_after <- fracdiff(data_no_overnight$Kwadrat_Wynik, h=20)
+fd_after$d
+```
+# Korelgoram dla 2016 opóźnień
+```{r}
+acf_squared <- acf(dane$Kwadrat_Wynik, lag.max = 7 * 24 * 12)
+plot(acf_squared$acf[-1], main = "Korelogram dla zestandaryzowanych stóp zwortu", type = 'l')
+
+```
+
+```{r}
+# Średnia zmienność w ciągu dnia przed standaryzacją
+ggplot(data_no_overnight, aes(x = X.TIME., y = abs(Stopy_zwrotu_zwykle))) +
+  stat_summary(fun = mean, geom = "line") +
+  ggtitle("Sezonowość przed standaryzacją")
+
+# Średnia zmienność w ciągu dnia po standaryzacji
+ggplot(data_no_overnight, aes(x = X.TIME., y = abs(Wynik))) +
+  stat_summary(fun = mean, geom = "line") +
+  ggtitle("Sezonowość po standaryzacji")
+
+```
+
+```{r}
+# Dane ze stóp zwrotu overnight
+summary(abs(data$Stopy_zwrotu_zwykle))
+
+# Dane bez stóp zwrotu overnight
+summary(abs(data_no_overnight$Stopy_zwrotu_zwykle))
+
+```
+
